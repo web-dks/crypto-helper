@@ -8,6 +8,18 @@ app.use(express.json({ limit: '2mb' }));
 // Load PRIVATE KEY from environment (Render: Environment → Add Secret)
 const rawPrivateKey = process.env.WHATSAPP_RSA_PRIVATE_KEY;
 const PRIVATE_KEY = rawPrivateKey ? rawPrivateKey.replace(/\\n/g, '\n') : undefined;
+const PRIVATE_PASSPHRASE = process.env.WHATSAPP_RSA_PASSPHRASE;
+
+// Normalize base64 or base64url and decode safely
+function decodeBase64Flexible(input) {
+  if (typeof input !== 'string') throw new Error('invalid_base64');
+  let normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = normalized.length % 4;
+  if (remainder === 2) normalized += '==';
+  else if (remainder === 3) normalized += '=';
+  else if (remainder === 1) throw new Error('invalid_base64');
+  return Buffer.from(normalized, 'base64');
+}
 
 app.post('/flows-crypto', (req, res) => {
   try {
@@ -20,18 +32,39 @@ app.post('/flows-crypto', (req, res) => {
     }
 
     // 1) Decrypt AES key (RSA-OAEP SHA-256)
+    const privateKeyObject = crypto.createPrivateKey({
+      key: PRIVATE_KEY,
+      format: 'pem',
+      passphrase: PRIVATE_PASSPHRASE
+    });
+    let encAesKeyBuffer;
+    try {
+      encAesKeyBuffer = decodeBase64Flexible(encrypted_aes_key);
+    } catch {
+      return res.status(421).json({ error: 'invalid_base64_encrypted_aes_key' });
+    }
     const aesKey = crypto.privateDecrypt(
       {
-        key: PRIVATE_KEY,
+        key: privateKeyObject,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: 'sha256'
       },
-      Buffer.from(encrypted_aes_key, 'base64')
+      encAesKeyBuffer
     );
 
     // 2) Decrypt payload (AES-128/192/256-CBC depending on key size)
-    const ivBuffer = Buffer.from(initial_vector, 'base64');
-    const dataBuffer = Buffer.from(encrypted_flow_data, 'base64');
+    let ivBuffer;
+    let dataBuffer;
+    try {
+      ivBuffer = decodeBase64Flexible(initial_vector);
+    } catch {
+      return res.status(421).json({ error: 'invalid_base64_initial_vector' });
+    }
+    try {
+      dataBuffer = decodeBase64Flexible(encrypted_flow_data);
+    } catch {
+      return res.status(421).json({ error: 'invalid_base64_encrypted_flow_data' });
+    }
 
     // Validate IV length (AES block size is 16 bytes)
     if (ivBuffer.length !== 16) {
