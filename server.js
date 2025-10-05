@@ -29,10 +29,21 @@ app.post('/flows-crypto', (req, res) => {
       Buffer.from(encrypted_aes_key, 'base64')
     );
 
-    // 2) Decrypt payload (AES-128/256-CBC depending on key size)
+    // 2) Decrypt payload (AES-128/192/256-CBC depending on key size)
     const ivBuffer = Buffer.from(initial_vector, 'base64');
     const dataBuffer = Buffer.from(encrypted_flow_data, 'base64');
-    const algorithm = aesKey.length === 16 ? 'aes-128-cbc' : 'aes-256-cbc';
+
+    // Validate IV length (AES block size is 16 bytes)
+    if (ivBuffer.length !== 16) {
+      return res.status(421).json({ error: 'invalid_iv_length' });
+    }
+
+    // Resolve AES algorithm from session key length
+    let algorithm;
+    if (aesKey.length === 16) algorithm = 'aes-128-cbc';
+    else if (aesKey.length === 24) algorithm = 'aes-192-cbc';
+    else if (aesKey.length === 32) algorithm = 'aes-256-cbc';
+    else return res.status(421).json({ error: 'invalid_aes_key_length' });
 
     const decipher = crypto.createDecipheriv(algorithm, aesKey, ivBuffer);
     const plaintext = Buffer.concat([decipher.update(dataBuffer), decipher.final()]);
