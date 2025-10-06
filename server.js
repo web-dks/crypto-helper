@@ -187,7 +187,16 @@ app.post('/flows-crypto', (req, res) => {
       clearResponse = reply;
     } else {
       // Default when no specific fields or reply: SUCCESS screen
-      clearResponse = { screen: 'SUCCESS' };
+      clearResponse = {
+        screen: 'SUCCESS',
+        data: {
+          extension_message_response: {
+            params: {
+              message: "Ocorrência registrada com sucesso"
+            }
+          }
+        }
+      };
     }
 
     // Optional debug echo: include decrypted request and the data being sent
