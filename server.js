@@ -162,7 +162,7 @@ app.post('/flows-crypto', (req, res) => {
     ) {
       // Health Check expected by Meta (no version field)
       clearResponse = { data: { status: 'active' } };
-    } else if (typeof reply !== 'undefined') {fazer 
+    } else if (typeof reply !== 'undefined') {
       clearResponse = reply;
     } else {
       clearResponse = { data: { ok: true } };
@@ -173,6 +173,10 @@ app.post('/flows-crypto', (req, res) => {
     const responsePayload = shouldEcho
       ? { data: clearResponse?.data, request: flowRequest }
       : clearResponse;
+
+    // Optional debug JSON: respond with both encrypted base64 and decrypted objects
+    const wantDebugJson = (req.get('x-debug-json') === '1') ||
+      (typeof req.query?.debug !== 'undefined' && ['1', 'true'].includes(String(req.query.debug).toLowerCase()));
 
     // 3) Encrypt response
     if (usedMode === 'gcm') {
@@ -185,6 +189,14 @@ app.post('/flows-crypto', (req, res) => {
       ]);
       const tag = cipherGcm.getAuthTag();
       const out = Buffer.concat([enc, tag]).toString('base64');
+      if (wantDebugJson) {
+        return res.json({
+          mode: 'gcm',
+          encrypted_base64: out,
+          data: clearResponse?.data,
+          request: flowRequest
+        });
+      }
       res.set('Content-Type', 'text/plain');
       return res.send(out);
     }
@@ -196,6 +208,16 @@ app.post('/flows-crypto', (req, res) => {
       cipherCbc.update(Buffer.from(JSON.stringify(responsePayload), 'utf8')),
       cipherCbc.final()
     ]);
+    if (wantDebugJson) {
+      return res.json({
+        mode: 'cbc',
+        encrypted_flow_data: encryptedResponse.toString('base64'),
+        encrypted_aes_key,
+        initial_vector,
+        data: clearResponse?.data,
+        request: flowRequest
+      });
+    }
     return res.json({
       encrypted_flow_data: encryptedResponse.toString('base64'),
       encrypted_aes_key,
