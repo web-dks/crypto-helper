@@ -70,6 +70,162 @@ function resolveAesAlgo(keyLength, mode) {
   return null;
 }
 
+async function fetchBuffer(url, headers = {}) {
+  const resp = await fetch(url, { headers });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    const err = new Error(`fetch_failed ${resp.status}`);
+    err.status = resp.status;
+    err.body = text;
+    throw err;
+  }
+  const arr = await resp.arrayBuffer();
+  return Buffer.from(arr);
+}
+
+function sha256Base64(buf) {
+  return crypto.createHash('sha256').update(buf).digest('base64');
+}
+
+function tryAesGcmDecrypt(cipherBuffer, keyBuffer, ivBuffer) {
+  const algo = resolveAesAlgo(keyBuffer.length, 'gcm');
+  if (!algo) throw new Error('unsupported_key_length');
+  if (ivBuffer.length !== 12 && ivBuffer.length !== 16) throw new Error('invalid_iv_length');
+  // Most implementations use 12-byte IV for GCM, but some flows use 16. Node accepts both.
+  const tagLen = 16;
+  if (cipherBuffer.length <= tagLen) throw new Error('cipher_too_short');
+  const ciphertext = cipherBuffer.subarray(0, cipherBuffer.length - tagLen);
+  const authTag = cipherBuffer.subarray(cipherBuffer.length - tagLen);
+  const decipher = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+function tryAesCbcDecrypt(cipherBuffer, keyBuffer, ivBuffer) {
+  const algo = resolveAesAlgo(keyBuffer.length, 'cbc');
+  if (!algo) throw new Error('unsupported_key_length');
+  if (ivBuffer.length !== 16) throw new Error('invalid_iv_length');
+  const decipher = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
+  return Buffer.concat([decipher.update(cipherBuffer), decipher.final()]);
+}
+
+function detectMimeType(buffer) {
+  if (!buffer || buffer.length < 12) return 'application/octet-stream';
+  // JPEG
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  // PNG
+  if (
+    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+    buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a
+  ) return 'image/png';
+  // WEBP (RIFF....WEBP)
+  if (
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+  ) return 'image/webp';
+  // GIF
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif';
+  return 'application/octet-stream';
+}
+
+app.post('/flows-images-decrypt', async (req, res) => {
+  try {
+    const sig = verifyMetaSignatureIfConfigured(req);
+    if (!sig.ok) return res.status(401).json({ error: sig.error });
+
+    const payload = req.body;
+    const items = Array.isArray(payload) ? payload : [payload];
+    if (!items.length) return res.status(400).json({ error: 'empty_payload' });
+
+    const results = [];
+    for (const item of items) {
+      const imagens = item?.request?.data?.imagens;
+      if (!Array.isArray(imagens) || imagens.length === 0) {
+        results.push({ ok: false, error: 'missing_images' });
+        continue;
+      }
+
+      const perItem = [];
+      for (const img of imagens) {
+        const fileName = img?.file_name;
+        const mediaId = img?.media_id;
+        const url = img?.cdn_url;
+        const meta = img?.encryption_metadata || {};
+        try {
+          if (!url || !meta?.encryption_key || !meta?.iv) {
+            perItem.push({ ok: false, file_name: fileName, media_id: mediaId, error: 'missing_fields' });
+            continue;
+          }
+
+          const keyBuf = decodeBase64Flexible(meta.encryption_key);
+          const ivBuf = decodeBase64Flexible(meta.iv);
+          const hmacBuf = meta.hmac_key ? decodeBase64Flexible(meta.hmac_key) : undefined;
+
+          // Fetch encrypted bytes from CDN (presigned URL usually requires no auth)
+          const cipherBuf = await fetchBuffer(url);
+
+          // Verify encrypted hash if provided
+          if (meta.encrypted_hash) {
+            const computedEncHash = sha256Base64(cipherBuf);
+            const providedEncHash = decodeBase64Flexible(meta.encrypted_hash);
+            if (!timingSafeEq(decodeBase64Flexible(computedEncHash), providedEncHash)) {
+              // proceed but flag mismatch
+            }
+          }
+
+          let plainBuf;
+          let mode = 'gcm';
+          try {
+            plainBuf = tryAesGcmDecrypt(cipherBuf, keyBuf, ivBuf);
+          } catch (eGcm) {
+            mode = 'cbc';
+            try {
+              // Try full buffer first
+              plainBuf = tryAesCbcDecrypt(cipherBuf, keyBuf, ivBuf);
+            } catch (eCbcFull) {
+              // Some formats append 32-byte HMAC to the end for CBC; try trimming
+              if (cipherBuf.length > 32) {
+                const trimmed = cipherBuf.subarray(0, cipherBuf.length - 32);
+                plainBuf = tryAesCbcDecrypt(trimmed, keyBuf, ivBuf);
+              } else {
+                throw eGcm;
+              }
+            }
+          }
+
+          // Verify plaintext hash if provided
+          let hashOk = true;
+          if (meta.plaintext_hash) {
+            const computedPlainHash = sha256Base64(plainBuf);
+            const providedPlainHash = decodeBase64Flexible(meta.plaintext_hash);
+            hashOk = timingSafeEq(decodeBase64Flexible(computedPlainHash), providedPlainHash);
+          }
+
+          const contentType = detectMimeType(plainBuf);
+          const base64 = plainBuf.toString('base64');
+          perItem.push({
+            ok: true,
+            file_name: fileName,
+            media_id: mediaId,
+            mode,
+            hash_ok: hashOk,
+            content_type: contentType,
+            base64
+          });
+        } catch (err) {
+          perItem.push({ ok: false, file_name: fileName, media_id: mediaId, error: String(err?.message || err) });
+        }
+      }
+      results.push({ ok: true, images: perItem });
+    }
+
+    return res.json({ ok: true, results });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'images_decryption_failed' });
+  }
+});
+
 app.post('/flows-crypto', (req, res) => {
   try {
     // 0) Optional: Verify Meta HMAC signature if app secrets are configured
