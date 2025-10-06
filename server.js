@@ -186,7 +186,8 @@ app.post('/flows-crypto', (req, res) => {
     } else if (typeof reply !== 'undefined') {
       clearResponse = reply;
     } else {
-      clearResponse = { data: { ok: true } };
+      // Default when no specific fields or reply: SUCCESS screen
+      clearResponse = { screen: 'SUCCESS' };
     }
 
     // Optional debug echo: include decrypted request and the data being sent
