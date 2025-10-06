@@ -153,8 +153,20 @@ app.post('/flows-crypto', (req, res) => {
       }
     }
 
-    // Build clear response (or use req.body.reply for a specific response)
-    const clearResponse = reply ?? { version: '3.0', data: { pong: true, echo: flowRequest } };
+    // Build clear response (Meta Health Check or normal)
+    let clearResponse;
+    if (
+      flowRequest?.action === 'ping' ||
+      flowRequest?.type === 'health_check' ||
+      flowRequest?.data?.health_check === true
+    ) {
+      // Health Check expected by Meta (no version field)
+      clearResponse = { data: { status: 'active' } };
+    } else if (typeof reply !== 'undefined') {
+      clearResponse = reply;
+    } else {
+      clearResponse = { data: { ok: true } };
+    }
 
     // 3) Encrypt response
     if (usedMode === 'gcm') {
