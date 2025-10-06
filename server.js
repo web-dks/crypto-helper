@@ -153,6 +153,16 @@ app.post('/flows-crypto', (req, res) => {
       }
     }
 
+    // Generate and inject flow_token into decrypted request for tracking/echo
+    let flowToken;
+    if (flowRequest && typeof flowRequest === 'object') {
+      if (!flowRequest.data || typeof flowRequest.data !== 'object') {
+        flowRequest.data = {};
+      }
+      flowToken = crypto.randomUUID();
+      flowRequest.data.flow_token = flowToken;
+    }
+
     // Build clear response (Meta Health Check or normal)
     let clearResponse;
     if (
@@ -173,7 +183,14 @@ app.post('/flows-crypto', (req, res) => {
     ) {
       clearResponse = {
         screen: 'SUCCESS',
-        data: { message: 'Ocorrência registrada com sucesso' }
+        data: {
+          extension_message_response: {
+            params: {
+              flow_token: flowToken || crypto.randomUUID(),
+              message: "'Ocorrência registrada com sucesso'"
+            }
+          }
+        }
       };
     } else if (typeof reply !== 'undefined') {
       clearResponse = reply;
