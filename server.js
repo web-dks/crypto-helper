@@ -162,11 +162,17 @@ app.post('/flows-crypto', (req, res) => {
     ) {
       // Health Check expected by Meta (no version field)
       clearResponse = { data: { status: 'active' } };
-    } else if (typeof reply !== 'undefined') {
+    } else if (typeof reply !== 'undefined') {fazer 
       clearResponse = reply;
     } else {
       clearResponse = { data: { ok: true } };
     }
+
+    // Optional debug echo: include decrypted request and the data being sent
+    const shouldEcho = (req.get('x-debug-echo') === '1') || (process.env.ECHO_REQUEST_IN_RESPONSE === '1');
+    const responsePayload = shouldEcho
+      ? { data: clearResponse?.data, request: flowRequest }
+      : clearResponse;
 
     // 3) Encrypt response
     if (usedMode === 'gcm') {
@@ -174,7 +180,7 @@ app.post('/flows-crypto', (req, res) => {
       const responseIv = invertBits(ivBuffer); // invert bits for response
       const cipherGcm = crypto.createCipheriv(algoGcm, aesKey, responseIv);
       const enc = Buffer.concat([
-        cipherGcm.update(Buffer.from(JSON.stringify(clearResponse), 'utf8')),
+        cipherGcm.update(Buffer.from(JSON.stringify(responsePayload), 'utf8')),
         cipherGcm.final()
       ]);
       const tag = cipherGcm.getAuthTag();
@@ -187,7 +193,7 @@ app.post('/flows-crypto', (req, res) => {
     const algoCbc = resolveAesAlgo(aesKey.length, 'cbc');
     const cipherCbc = crypto.createCipheriv(algoCbc, aesKey, ivBuffer);
     const encryptedResponse = Buffer.concat([
-      cipherCbc.update(Buffer.from(JSON.stringify(clearResponse), 'utf8')),
+      cipherCbc.update(Buffer.from(JSON.stringify(responsePayload), 'utf8')),
       cipherCbc.final()
     ]);
     return res.json({
