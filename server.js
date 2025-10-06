@@ -178,7 +178,7 @@ app.post('/flows-crypto', (req, res) => {
         data: {
           extension_message_response: {
             params: {
-              message: "'Ocorrência registrada com sucesso'"
+              message: "Ocorrência registrada com sucesso"
             }
           }
         }
