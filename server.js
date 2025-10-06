@@ -162,6 +162,19 @@ app.post('/flows-crypto', (req, res) => {
     ) {
       // Health Check expected by Meta (no version field)
       clearResponse = { data: { status: 'active' } };
+    } else if (
+      // Detect ocorrência payload and return explicit success structure
+      (flowRequest && (
+        Object.prototype.hasOwnProperty.call(flowRequest, 'tipo_ocorrencia') ||
+        Object.prototype.hasOwnProperty.call(flowRequest, 'local_ocorrencia') ||
+        Object.prototype.hasOwnProperty.call(flowRequest, 'fato_ocorrencia') ||
+        Object.prototype.hasOwnProperty.call(flowRequest, 'prioridade')
+      ))
+    ) {
+      clearResponse = {
+        screen: 'SUCCESS',
+        data: { message: 'Ocorrência registrada com sucesso' }
+      };
     } else if (typeof reply !== 'undefined') {
       clearResponse = reply;
     } else {
