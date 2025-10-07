@@ -101,6 +101,47 @@ function tryAesGcmDecrypt(cipherBuffer, keyBuffer, ivBuffer) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
+function tryAesGcmDecryptAny(cipherBuffer, keyBuffer, ivBuffer) {
+  const variants = [cipherBuffer];
+  if (cipherBuffer.length > 16) variants.push(cipherBuffer.subarray(0, cipherBuffer.length - 16));
+  if (cipherBuffer.length > 32) variants.push(cipherBuffer.subarray(0, cipherBuffer.length - 32));
+  if (cipherBuffer.length > 48) variants.push(cipherBuffer.subarray(0, cipherBuffer.length - 48));
+
+  const algo = resolveAesAlgo(keyBuffer.length, 'gcm');
+  if (!algo) throw new Error('unsupported_key_length');
+  if (ivBuffer.length !== 12 && ivBuffer.length !== 16) throw new Error('invalid_iv_length');
+
+  let lastErr;
+  for (const v of variants) {
+    const tagLen = 16;
+    // Try TAG at the end (cipher||tag)
+    if (v.length > tagLen) {
+      try {
+        const c = v.subarray(0, v.length - tagLen);
+        const t = v.subarray(v.length - tagLen);
+        const d = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
+        d.setAuthTag(t);
+        return Buffer.concat([d.update(c), d.final()]);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    // Try TAG at the beginning (tag||cipher)
+    if (v.length > tagLen) {
+      try {
+        const t = v.subarray(0, tagLen);
+        const c = v.subarray(tagLen);
+        const d = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
+        d.setAuthTag(t);
+        return Buffer.concat([d.update(c), d.final()]);
+      } catch (e2) {
+        lastErr = e2;
+      }
+    }
+  }
+  throw lastErr || new Error('gcm_decrypt_failed');
+}
+
 function tryAesCbcDecrypt(cipherBuffer, keyBuffer, ivBuffer) {
   const algo = resolveAesAlgo(keyBuffer.length, 'cbc');
   if (!algo) throw new Error('unsupported_key_length');
@@ -176,7 +217,8 @@ app.post('/flows-images-decrypt', async (req, res) => {
           let plainBuf;
           let mode = 'gcm';
           try {
-            plainBuf = tryAesGcmDecrypt(cipherBuf, keyBuf, ivBuf);
+            // Try several GCM tag placements/variants
+            plainBuf = tryAesGcmDecryptAny(cipherBuf, keyBuf, ivBuf);
           } catch (eGcm) {
             mode = 'cbc';
             // In CBC the ciphertext must be a multiple of 16 bytes.
