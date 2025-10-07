@@ -179,18 +179,26 @@ app.post('/flows-images-decrypt', async (req, res) => {
             plainBuf = tryAesGcmDecrypt(cipherBuf, keyBuf, ivBuf);
           } catch (eGcm) {
             mode = 'cbc';
-            try {
-              // Try full buffer first
-              plainBuf = tryAesCbcDecrypt(cipherBuf, keyBuf, ivBuf);
-            } catch (eCbcFull) {
-              // Some formats append 32-byte HMAC to the end for CBC; try trimming
-              if (cipherBuf.length > 32) {
-                const trimmed = cipherBuf.subarray(0, cipherBuf.length - 32);
-                plainBuf = tryAesCbcDecrypt(trimmed, keyBuf, ivBuf);
-              } else {
-                throw eGcm;
+            // In CBC the ciphertext must be a multiple of 16 bytes.
+            // Some providers append 16-byte GCM tag or 32-byte HMAC at the end of the file.
+            const candidates = [cipherBuf];
+            if (cipherBuf.length > 16) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 16));
+            if (cipherBuf.length > 32) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 32));
+            if (cipherBuf.length > 48) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 48));
+
+            let lastErr = eGcm;
+            let success = false;
+            for (const candidate of candidates) {
+              if (candidate.length % 16 !== 0) continue;
+              try {
+                plainBuf = tryAesCbcDecrypt(candidate, keyBuf, ivBuf);
+                success = true;
+                break;
+              } catch (eCbcVar) {
+                lastErr = eCbcVar;
               }
             }
+            if (!success) throw lastErr;
           }
 
           // Verify plaintext hash if provided
