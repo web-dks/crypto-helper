@@ -111,31 +111,37 @@ function tryAesGcmDecryptAny(cipherBuffer, keyBuffer, ivBuffer) {
   if (!algo) throw new Error('unsupported_key_length');
   if (ivBuffer.length !== 12 && ivBuffer.length !== 16) throw new Error('invalid_iv_length');
 
+  const ivCandidates = [ivBuffer];
+  // Some providers send 16-byte IV but GCM was produced with 12-byte IV (first 12 bytes)
+  if (ivBuffer.length === 16) ivCandidates.push(ivBuffer.subarray(0, 12));
+
   let lastErr;
-  for (const v of variants) {
-    const tagLen = 16;
-    // Try TAG at the end (cipher||tag)
-    if (v.length > tagLen) {
-      try {
-        const c = v.subarray(0, v.length - tagLen);
-        const t = v.subarray(v.length - tagLen);
-        const d = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
-        d.setAuthTag(t);
-        return Buffer.concat([d.update(c), d.final()]);
-      } catch (e) {
-        lastErr = e;
+  for (const iv of ivCandidates) {
+    for (const v of variants) {
+      const tagLen = 16;
+      // Try TAG at the end (cipher||tag)
+      if (v.length > tagLen) {
+        try {
+          const c = v.subarray(0, v.length - tagLen);
+          const t = v.subarray(v.length - tagLen);
+          const d = crypto.createDecipheriv(algo, keyBuffer, iv);
+          d.setAuthTag(t);
+          return Buffer.concat([d.update(c), d.final()]);
+        } catch (e) {
+          lastErr = e;
+        }
       }
-    }
-    // Try TAG at the beginning (tag||cipher)
-    if (v.length > tagLen) {
-      try {
-        const t = v.subarray(0, tagLen);
-        const c = v.subarray(tagLen);
-        const d = crypto.createDecipheriv(algo, keyBuffer, ivBuffer);
-        d.setAuthTag(t);
-        return Buffer.concat([d.update(c), d.final()]);
-      } catch (e2) {
-        lastErr = e2;
+      // Try TAG at the beginning (tag||cipher)
+      if (v.length > tagLen) {
+        try {
+          const t = v.subarray(0, tagLen);
+          const c = v.subarray(tagLen);
+          const d = crypto.createDecipheriv(algo, keyBuffer, iv);
+          d.setAuthTag(t);
+          return Buffer.concat([d.update(c), d.final()]);
+        } catch (e2) {
+          lastErr = e2;
+        }
       }
     }
   }
