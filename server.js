@@ -228,12 +228,34 @@ app.post('/flows-images-decrypt', async (req, res) => {
           } catch (eGcm) {
             mode = 'cbc';
             // In CBC the ciphertext must be a multiple of 16 bytes.
-            // Some providers append 16-byte GCM tag or 32-byte HMAC at the end of the file.
-            const candidates = [cipherBuf];
-            if (cipherBuf.length > 16) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 16));
-            if (cipherBuf.length > 32) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 32));
-            if (cipherBuf.length > 48) candidates.push(cipherBuf.subarray(0, cipherBuf.length - 48));
+            // Alguns provedores incluem IV no começo do arquivo e/ou HMAC/tag no final.
+            // Gerar candidatos removendo 0 ou 16 bytes do início e 0/16/32/48 bytes do final,
+            // além de aparar até múltiplo de 16.
+            const prefixRemovals = [0, 16];
+            const suffixRemovals = [0, 16, 32, 48];
 
+            const buildCandidates = () => {
+              const out = [];
+              for (const pre of prefixRemovals) {
+                if (cipherBuf.length > pre) {
+                  const afterPre = cipherBuf.subarray(pre);
+                  for (const suf of suffixRemovals) {
+                    if (afterPre.length > suf) {
+                      const base = afterPre.subarray(0, afterPre.length - suf);
+                      // também tentar aparar o resto até múltiplo de 16
+                      const remainder = base.length % 16;
+                      const baseTrimmed = remainder === 0 ? base : base.subarray(0, base.length - remainder);
+                      if (baseTrimmed.length >= 16) {
+                        out.push(baseTrimmed);
+                      }
+                    }
+                  }
+                }
+              }
+              return out;
+            };
+
+            const candidates = buildCandidates();
             let lastErr = eGcm;
             let success = false;
             for (const candidate of candidates) {
